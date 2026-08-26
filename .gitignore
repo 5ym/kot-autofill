@@ -1,0 +1,4 @@
+.env
+shots/
+node_modules/
+data.csv

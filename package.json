@@ -1,0 +1,13 @@
+{
+  "name": "kot-autofill",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dry": "bun run src/index.ts --dry-run",
+    "inspect": "bun run src/index.ts --inspect-only"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
