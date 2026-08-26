@@ -82,11 +82,14 @@ export async function clickByText(
     const root = ${opts.within ? `document.querySelector(${JSON.stringify(opts.within)})` : "document"};
     if (!root) return false;
     const els = [...root.querySelectorAll("a, button, input[type=button], input[type=submit], div, span")];
-    const target = els.find(el => {
+    const matches = els.filter(el => {
       const t = (el.textContent || el.value || "").trim();
       return ${opts.exact ? `t === ${JSON.stringify(text)}` : `t.includes(${JSON.stringify(text)})`}
         && el.offsetParent !== null;
     });
+    // 外側のコンテナではなく一番内側の要素をクリックする
+    matches.sort((a, b) => (a.textContent || "").length - (b.textContent || "").length);
+    const target = matches[0];
     if (!target) return false;
     target.click();
     return true;
@@ -94,22 +97,18 @@ export async function clickByText(
   if (!ok) throw new Error(`テキスト "${text}" の要素が見つかりません`);
 }
 
-/** デバッグ用: 現在ページのフォーム要素を一覧するダンプを返す */
-export async function dumpForms(view: WebViewLike): Promise<string> {
-  return await view.evaluate(`(() => {
-    const rows = [...document.querySelectorAll("input, select, textarea, button")].map(el => {
-      const opts = el.tagName === "SELECT"
-        ? " options=[" + [...el.options].map(o => o.value + ":" + o.textContent.trim()).join(", ") + "]"
-        : "";
-      return el.tagName.toLowerCase()
-        + " id=" + (el.id || "-")
-        + " name=" + (el.name || "-")
-        + " type=" + (el.type || "-")
-        + " value=" + JSON.stringify((el.value || "").slice(0, 20))
-        + opts;
-    });
-    return "URL: " + location.href + "\\n" + rows.join("\\n");
+/**
+ * セレクタの要素を JS の click() で押す。
+ * (KOTのカスタムボタンは hidden input のため view.click の可視性チェックに落ちる)
+ */
+export async function clickSelector(view: WebViewLike, selector: string) {
+  const ok = await view.evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return false;
+    el.click();
+    return true;
   })()`);
+  if (!ok) throw new Error(`要素が見つかりません: ${selector}`);
 }
 
 export async function shot(view: WebViewLike, name: string) {

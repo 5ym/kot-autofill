@@ -9,11 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
-# コンテナ内では Chromium のサンドボックスが使えないため --no-sandbox を強制する
-RUN printf '#!/bin/sh\nexec /usr/bin/chromium --no-sandbox --disable-dev-shm-usage "$@"\n' \
+# コンテナ内では Chromium のサンドボックスが使えないため --no-sandbox を強制する。
+# --lang=ja: KOTはブラウザの言語で表示が変わり、日本語テキストで要素を探すため必須
+RUN printf '#!/bin/sh\nexec /usr/bin/chromium --no-sandbox --disable-dev-shm-usage --lang=ja "$@"\n' \
       > /usr/local/bin/google-chrome \
     && chmod +x /usr/local/bin/google-chrome \
     && ln -s /usr/local/bin/google-chrome /usr/local/bin/chrome
+ENV LANGUAGE=ja LANG=ja_JP.UTF-8
 
 WORKDIR /app
 COPY package.json entrypoint.sh ./
@@ -21,4 +23,3 @@ COPY src ./src
 RUN chmod +x entrypoint.sh
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["--help"]

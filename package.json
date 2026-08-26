@@ -5,7 +5,6 @@
   "scripts": {
     "build": "docker compose build",
     "plan": "docker compose run --rm kot --plan-only",
-    "inspect": "docker compose run --rm kot --inspect-only",
     "dry": "docker compose run --rm kot --dry-run",
     "start": "docker compose run --rm kot"
   },

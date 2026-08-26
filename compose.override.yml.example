@@ -8,9 +8,5 @@ services:
       KOT_ID: your_login_id
       KOT_PASSWORD: your_password
 
-      # 休憩開始のデフォルト時刻(休憩は「長さ」でCSVに入っているため、
-      # この時刻から休憩を開始したとみなして 休憩開始/終了 の打刻に変換する)
-      BREAK_START: "12:00"
-
       # 申請理由(打刻申請時に必須の場合が多い)
       REQUEST_REMARK: 勤怠自動入力

@@ -1,65 +1,110 @@
+export interface BreakSpan {
+  start: string; // "9:48"
+  end: string; // "10:34"
+}
+
 export interface DayEntry {
-  /** 対象日 (1〜31 の日、または YYYY-MM-DD) */
-  day: number;
+  day: number; // 日 (1〜31)
   date: string; // YYYY-MM-DD
   start: string; // "9:58"
   end: string; // "21:30"
-  breakDur: string; // "6:18" (休憩の長さ)
+  breaks: BreakSpan[]; // 休憩時間帯 (空 = 休憩なし)
+}
+
+export interface Sheet {
+  year: number;
+  month: number;
+  entries: DayEntry[];
 }
 
 /**
- * CSV/TSV をパースする。対応形式:
- *   3列: 出勤,退勤,休憩          → 行番号がそのまま「日」になる (--month 必須)
- *   4列: 日付,出勤,退勤,休憩     → 日付は "5" / "8/5" / "2026-08-05" のいずれか
- * スプレッドシートからのコピペ(タブ区切り)もそのまま使える。
+ * 稼働レポートの CSV/TSV をパースする。
+ * 1行目がヘッダーで、「日付」(YYYY-MM-DD)、「稼働開始」「稼働終了」「休憩時間帯」の
+ * 列を列名で見つけて使う。それ以外の列は無視する。
+ * 休憩時間帯 (例 "9:48-10:34 / 10:42-14:17") はそのまま複数の休憩打刻になる。
+ * 出勤・退勤とも空の行(「合計」行など)はスキップする。
+ * 対象月は日付列から自動で決まる(複数月が混ざっているとエラー)。
  */
-export function parseSheet(text: string, year: number, month: number): DayEntry[] {
-  const entries: DayEntry[] = [];
+export function parseSheet(text: string): Sheet {
   const lines = text.split(/\r?\n/);
-  let rowIndex = 0;
+  const header = parseHeader(lines);
+  const entries: DayEntry[] = [];
 
-  for (const raw of lines) {
-    const line = raw.trim();
-    rowIndex++;
+  for (let i = header.headerRow; i < lines.length; i++) {
+    const line = lines[i].trim();
     if (!line) continue;
     const cols = line.split(/[\t,]/).map((c) => c.trim());
 
-    let day: number;
-    let times: string[];
-    if (cols.length >= 4 && cols[3] !== "") {
-      day = parseDayCell(cols[0], year, month);
-      times = cols.slice(1, 4);
-    } else if (cols.length >= 3) {
-      day = rowIndex; // 3列形式: 行番号 = 日
-      times = cols.slice(0, 3);
-    } else {
-      throw new Error(`行${rowIndex}: 列数が足りません: "${line}"`);
-    }
-
-    const [start, end, breakDur] = times;
-    // 空の日はスキップ(休日など)
+    const start = cols[header.start] ?? "";
+    const end = cols[header.end] ?? "";
+    // 出勤も退勤も無い行はスキップ(休日・「合計」行など)
     if (!start && !end) continue;
-    if (!start || !end || !breakDur) {
-      throw new Error(`行${rowIndex}: 出勤/退勤/休憩のいずれかが空です: "${line}"`);
+    if (!start || !end) {
+      throw new Error(`行${i + 1}: 稼働開始/稼働終了の片方だけが空です: "${line}"`);
     }
 
-    const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    entries.push({ day, date, start, end, breakDur });
+    const dateCell = cols[header.date] ?? "";
+    const m = dateCell.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) {
+      throw new Error(`行${i + 1}: 日付が YYYY-MM-DD 形式ではありません: "${dateCell}"`);
+    }
+
+    entries.push({
+      day: Number(m[3]),
+      date: dateCell,
+      start,
+      end,
+      breaks: parseBreaks(cols[header.breaks] ?? "", i + 1),
+    });
   }
-  return entries;
+
+  if (entries.length === 0) throw new Error("CSVにデータ行がありません");
+
+  const months = new Set(entries.map((e) => e.date.slice(0, 7)));
+  if (months.size > 1) {
+    throw new Error(`複数の月が混ざっています: ${[...months].join(", ")}`);
+  }
+  const [year, month] = entries[0].date.split("-").map(Number);
+  return { year, month, entries };
 }
 
-function parseDayCell(cell: string, year: number, month: number): number {
-  let m = cell.match(/^(\d{4})-(\d{2})-(\d{2})$/); // YYYY-MM-DD
-  if (m) {
-    if (Number(m[1]) !== year || Number(m[2]) !== month) {
-      throw new Error(`日付 ${cell} が指定した年月 ${year}-${month} と一致しません`);
+/** "9:48-10:34 / 10:42-14:17" → [{start,end}, ...] (空セルは休憩なし) */
+function parseBreaks(cell: string, row: number): BreakSpan[] {
+  if (!cell) return [];
+  return cell.split("/").map((span) => {
+    const m = span.trim().match(/^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/);
+    if (!m) {
+      throw new Error(`行${row}: 休憩時間帯を解釈できません: "${span.trim()}" (H:MM-H:MM 形式)`);
     }
-    return Number(m[3]);
+    return { start: m[1], end: m[2] };
+  });
+}
+
+interface HeaderMap {
+  headerRow: number; // ヘッダーの行番号 (1始まり)
+  date: number;
+  start: number;
+  end: number;
+  breaks: number;
+}
+
+function parseHeader(lines: string[]): HeaderMap {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const cols = line.split(/[\t,]/).map((c) => c.trim());
+    const find = (...names: string[]) => cols.findIndex((c) => names.includes(c));
+    const date = find("日付");
+    const start = find("稼働開始", "出勤");
+    const end = find("稼働終了", "退勤");
+    const breaks = find("休憩時間帯");
+    if (date < 0 || start < 0 || end < 0 || breaks < 0) {
+      throw new Error(
+        "1行目に「日付」「稼働開始」「稼働終了」「休憩時間帯」のヘッダーが見つかりません。" +
+          "稼働レポートをヘッダーごと data.csv に貼り付けてください",
+      );
+    }
+    return { headerRow: i + 1, date, start, end, breaks };
   }
-  m = cell.match(/^(\d{1,2})\/(\d{1,2})$/); // M/D
-  if (m) return Number(m[2]);
-  m = cell.match(/^(\d{1,2})$/); // D
-  if (m) return Number(m[1]);
-  throw new Error(`日付セルを解釈できません: "${cell}"`);
+  throw new Error("CSVが空です");
 }
