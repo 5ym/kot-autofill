@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "start": "bun run src/index.ts",
-    "dry": "bun run src/index.ts --dry-run",
-    "inspect": "bun run src/index.ts --inspect-only"
+    "build": "docker compose build",
+    "plan": "docker compose run --rm kot --plan-only",
+    "inspect": "docker compose run --rm kot --inspect-only",
+    "dry": "docker compose run --rm kot --dry-run",
+    "start": "docker compose run --rm kot"
   },
   "devDependencies": {
     "@types/bun": "latest"

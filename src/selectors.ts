@@ -2,7 +2,7 @@
  * KING OF TIME の画面セレクタ設定。
  *
  * KOTは契約・設定によって画面構成が変わるため、初回は
- *   bun run src/index.ts --inspect-only
+ *   docker compose run --rm kot --inspect-only
  * で各ステップのスクリーンショット(shots/)とフォーム要素ダンプを確認し、
  * 実際の画面に合わせてここを修正すること。[要確認] を付けた箇所は特に注意。
  */

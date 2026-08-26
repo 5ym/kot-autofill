@@ -3,20 +3,19 @@
 スプレッドシートの「出勤・退勤・休憩」データを KING OF TIME に自動入力(打刻申請)するツール。
 Bun 1.4 の実験的ブラウザ自動化 API [`Bun.WebView`](https://bun.com/docs/runtime/webview) を使っており、Puppeteer/Playwright は不要。
 
+**実行は Docker のみ**(Bun 1.4 + Chromium + xvfb 入りのイメージをビルドする)。
+ローカルの bun で直接実行しようとするとエラーで止まる。
+
 ## 必要なもの
 
-- **Bun 1.4 以上** — `bun upgrade` で更新(`Bun.WebView` は 1.4 の新機能)
-- **Chrome / Chromium / Edge** — Linux(WSL2含む)では WebView のバックエンドとして必要
-  ```sh
-  sudo apt install chromium-browser
-  # または Google Chrome の .deb をインストール
-  ```
+- Docker / Docker Compose
 
 ## セットアップ
 
 ```sh
 cd kot-autofill
-cp .env.example .env   # ログインURL・ID・パスワードを記入
+cp compose.override.yml.example compose.override.yml   # ログインURL・ID・パスワードを記入
+docker compose build                                   # 初回とコード変更時
 ```
 
 `data.csv` にスプレッドシートの A〜C 列(出勤, 退勤, 休憩)を貼り付ける。
@@ -30,18 +29,20 @@ cp .env.example .env   # ログインURL・ID・パスワードを記入
 
 ```sh
 # 1. ブラウザを開かず、入力予定の内容だけ確認
-bun run src/index.ts --plan-only --month 2026-08
+docker compose run --rm kot --plan-only --month 2026-08
 
 # 2. 初回のみ: ログイン→タイムカードまで進めて画面要素をダンプ
 #    shots/*.png と出力を見て src/selectors.ts の [要確認] 箇所を実画面に合わせる
-bun run src/index.ts --inspect-only
+docker compose run --rm kot --inspect-only
 
 # 3. フォーム入力までやって申請ボタンは押さないリハーサル
-bun run src/index.ts --dry-run --day 1
+docker compose run --rm kot --dry-run --day 1
 
 # 4. 本番
-bun run src/index.ts --month 2026-08
+docker compose run --rm kot --month 2026-08
 ```
+
+`bun run plan` / `inspect` / `dry` / `start` のショートカットも使える(中身は上の docker compose コマンド)。
 
 `--day N` で特定の日だけ入力できる。各ステップのスクリーンショットが `shots/` に残る。
 
@@ -52,4 +53,4 @@ bun run src/index.ts --month 2026-08
   **必ず `--inspect-only` → `--dry-run` で確認してから本番実行**すること。
 - 申請内容は自分で最終確認すること(勤怠は正確に!)。誤入力しても KOT 上の申請は
   承認前なら取り下げられるが、`--dry-run` で事前確認するのが安全。
-- `.env` にパスワードを置くので、リポジトリにコミットしないこと(`.gitignore` 済み)。
+- パスワードは `compose.override.yml` に置くので、リポジトリにコミットしないこと(`.gitignore` 済み)。

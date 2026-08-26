@@ -1,4 +1,4 @@
-.env
+compose.override.yml
 shots/
 node_modules/
 data.csv

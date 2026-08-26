@@ -1,0 +1,6 @@
+services:
+  kot:
+    build: .
+    volumes:
+      - ./data.csv:/app/data.csv:ro
+      - ./shots:/app/shots

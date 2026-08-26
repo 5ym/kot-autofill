@@ -1,4 +1,15 @@
 import { parseArgs } from "util";
+import { existsSync } from "fs";
+
+// 必ず Docker コンテナ内で実行する (ローカルの bun 直実行を禁止)
+if (!existsSync("/.dockerenv") && !process.env.ALLOW_LOCAL) {
+  console.error(
+    "このツールは Docker で実行してください:\n" +
+      "  docker compose run --rm kot --plan-only\n" +
+      "(どうしてもローカルで動かす場合は ALLOW_LOCAL=1 を設定)",
+  );
+  process.exit(1);
+}
 import { parseSheet } from "./csv";
 import { login, openTimecard, fillDay, inspect, type KotConfig } from "./kot";
 import { createView } from "./webview";
@@ -32,7 +43,7 @@ if (args.help) {
   --inspect-only    ログイン→タイムカードまで進み、画面の要素をダンプ
                     (初回にセレクタを確認するために使う)
 
-環境変数 (.env): KOT_LOGIN_URL, KOT_ID, KOT_PASSWORD, BREAK_START, REQUEST_REMARK`);
+環境変数 (compose.override.yml で設定): KOT_LOGIN_URL, KOT_ID, KOT_PASSWORD, BREAK_START, REQUEST_REMARK`);
   process.exit(0);
 }
 
@@ -88,7 +99,10 @@ if (args["plan-only"]) {
 }
 
 if (!cfg.id || !cfg.password) {
-  console.error(".env に KOT_ID / KOT_PASSWORD を設定してください (.env.example を参照)");
+  console.error(
+    "compose.override.yml に KOT_ID / KOT_PASSWORD を設定してください " +
+      "(compose.override.yml.example を参照)",
+  );
   process.exit(1);
 }
 
