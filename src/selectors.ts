@@ -19,11 +19,31 @@ export const SEL = {
 
   timecard: {
     // タイムカード表が表示されたことの判定。
-    // 各日の行 (working_date) があり、かつ編集画面 (打刻追加ボタンがある) ではないこと
-    ready: `!!document.querySelector('input[name="working_date"]') && !document.querySelector("#recording_timestamp_add")`,
+    // 月選択ピッカーはタイムカード一覧ページにしか無い (打刻申請/スケジュール申請の
+    // 個別編集ページにも working_date は1個だけ存在するため、それだけでは判定できない)
+    ready: `!!document.querySelector("#select_year_month_picker")`,
+    // 表示月の切り替え (デフォルトは今月なので、対象月へ移動する)
+    monthPicker: "#select_year_month_picker",
+    monthYearHidden: "#year",
+    monthMonthHidden: "#month",
+    monthDisplayButton: "#display_button",
     // 各日の行は hidden input working_date=YYYYMMDD で特定する。
     // 申請は行内ドロップダウンの「打刻申請」option (値が押すべきボタンのCSSセレクタ)
     requestOptionText: "打刻申請",
+  },
+
+  schedule: {
+    // タイムカード行のドロップダウンの option テキスト
+    requestOptionText: "スケジュール申請",
+    // スケジュール申請フォーム
+    ready: `!!document.querySelector('select[name="schedule_pattern_id"]')`,
+    patternSelect: `select[name="schedule_pattern_id"]`,
+    dayTypeSelect: `select[name="work_day_type_code"]`,
+    // 申請中の場合はここに既存申請のIDが入る
+    requestIdInput: `input[name="schedule_request_id"]`,
+    remarkInput: `input[name="remark"], textarea[name="remark"]`,
+    submit: "#button_01",
+    back: "#button_03",
   },
 
   edit: {

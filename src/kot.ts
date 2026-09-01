@@ -8,6 +8,7 @@ import {
   selectByText,
   clickByText,
   clickSelector,
+  disableDialogs,
   shot,
 } from "./webview";
 
@@ -17,6 +18,8 @@ export interface KotConfig {
   password: string;
   remark: string; // 申請理由
   dryRun: boolean; // true なら申請ボタンを押さない
+  schedulePattern: string; // --schedule で使うスケジュールパターン名
+  scheduleDayType: string; // --schedule で使う勤務日種別
 }
 
 export async function login(view: WebViewLike, cfg: KotConfig) {
@@ -34,41 +37,65 @@ export async function login(view: WebViewLike, cfg: KotConfig) {
   console.log("ログイン成功");
 }
 
-export async function openTimecard(view: WebViewLike) {
-  if (await view.evaluate(`!!(${SEL.timecard.ready})`)) return; // 既にタイムカード表示中
-  if (await view.evaluate(`!!document.querySelector(${JSON.stringify(SEL.edit.back)})`)) {
-    // 編集画面に居る場合は「戻る」でタイムカードへ
-    await clickSelector(view, SEL.edit.back);
-  } else {
-    // レコーダー画面: メニューが閉じているとリンクが不可視なので、先にメニューアイコンを開く
-    try {
-      await view.click(SEL.menuIcon);
-      await Bun.sleep(300);
-    } catch {
-      /* メニューアイコンが無い画面構成なら無視 */
+export async function openTimecard(view: WebViewLike, year: number, month: number) {
+  if (!(await view.evaluate(`!!(${SEL.timecard.ready})`))) {
+    if (await view.evaluate(`!!document.querySelector(${JSON.stringify(SEL.edit.back)})`)) {
+      // 編集画面に居る場合は「戻る」でタイムカードへ
+      await clickSelector(view, SEL.edit.back);
+    } else {
+      // レコーダー画面: メニューが閉じているとリンクが不可視なので、先にメニューアイコンを開く
+      try {
+        await view.click(SEL.menuIcon);
+        await Bun.sleep(300);
+      } catch {
+        /* メニューアイコンが無い画面構成なら無視 */
+      }
+      await clickByText(view, SEL.timecardLinkText);
     }
-    await clickByText(view, SEL.timecardLinkText);
+    await waitFor(view, SEL.timecard.ready, "タイムカード表示");
   }
-  await waitFor(view, SEL.timecard.ready, "タイムカード表示");
+
+  // 表示月がCSVの対象月と違えば移動する (デフォルトは今月)
+  const ym = `${year}${String(month).padStart(2, "0")}`;
+  const shownYm = await view.evaluate(
+    `document.querySelector('input[name="working_date"]').value.slice(0, 6)`,
+  );
+  if (shownYm !== ym) {
+    await setValue(view, SEL.timecard.monthPicker, `${year}/${String(month).padStart(2, "0")}`);
+    await setValue(view, SEL.timecard.monthYearHidden, String(year));
+    await setValue(view, SEL.timecard.monthMonthHidden, String(month).padStart(2, "0"));
+    await clickSelector(view, SEL.timecard.monthDisplayButton);
+    await waitFor(
+      view,
+      `(${SEL.timecard.ready}) && document.querySelector('input[name="working_date"]').value.slice(0, 6) === "${ym}"`,
+      `${year}年${month}月の表示`,
+    );
+  }
+
   await shot(view, "03-timecard");
-  console.log("タイムカードを開きました");
+  console.log(`タイムカードを開きました (${year}年${month}月)`);
 }
 
 /**
- * タイムカード表から対象日の行を見つけて打刻申請画面を開く。
+ * タイムカード表から対象日の行を見つけて申請画面を開く。
  * 行は hidden input working_date=YYYYMMDD で特定し、行内ドロップダウンの
- * 「打刻申請」option の値 (押すべきボタンのCSSセレクタ) をクリックする。
+ * option (値が押すべきボタンのCSSセレクタ) をクリックする。
  */
-async function openDayEditPage(view: WebViewLike, entry: DayEntry) {
+async function openDayRequestPage(
+  view: WebViewLike,
+  entry: DayEntry,
+  optionText: string,
+  readyExpr: string,
+  label: string,
+) {
   const ymd = entry.date.replaceAll("-", "");
   const ok = await view.evaluate(`(() => {
     const dateInput = document.querySelector('input[name="working_date"][value="${ymd}"]');
     const row = dateInput && dateInput.closest("tr");
     if (!row) return "row-not-found";
     const opt = [...row.querySelectorAll("select option")]
-      .find(o => o.textContent.trim() === ${JSON.stringify(SEL.timecard.requestOptionText)});
-    const btn = (opt && document.querySelector(opt.value))
-      || row.querySelector('button[id^="button_05"]:not([id*="schdule"])');
+      .find(o => o.textContent.trim() === ${JSON.stringify(optionText)});
+    const btn = opt && document.querySelector(opt.value);
     if (!btn) return "link-not-found";
     btn.click();
     return "ok";
@@ -83,11 +110,93 @@ async function openDayEditPage(view: WebViewLike, entry: DayEntry) {
       `${entry.date} の行が開けません (${ok})。タイムカードの表示月と対象月が一致しているか確認してください [${state}]`,
     );
   }
+  await waitFor(view, readyExpr, `${entry.date} ${label}`);
+  // 個別ページへのフル遷移のたびに confirm()/alert() を無効化し直す必要がある
+  await disableDialogs(view);
+}
+
+function openDayEditPage(view: WebViewLike, entry: DayEntry) {
+  return openDayRequestPage(
+    view,
+    entry,
+    SEL.timecard.requestOptionText,
+    `!!document.querySelector(${JSON.stringify(SEL.edit.typeSelect.replace("{i}", "1"))})`,
+    "打刻申請フォーム",
+  );
+}
+
+/**
+ * 休日設定の日にスケジュール申請を出して勤務日扱いにする。
+ * パターンと勤務日種別は cfg.schedulePattern / cfg.scheduleDayType (時刻はパターンの既定値)。
+ * 平日設定の日と申請中の日はスキップする。
+ */
+export async function fillSchedule(view: WebViewLike, entry: DayEntry, cfg: KotConfig) {
+  const ymd = entry.date.replaceAll("-", "");
+  const rowText = await view.evaluate(`(() => {
+    const d = document.querySelector('input[name="working_date"][value="${ymd}"]');
+    const row = d && d.closest("tr");
+    return row ? row.innerText.replace(/\\s+/g, " ") : "";
+  })()`);
+  if (!rowText) throw new Error(`${entry.date} の行が見つかりません`);
+  if (!/所定休日|法定休日|法定外休日/.test(rowText)) {
+    console.log(`${entry.date}: 休日設定ではないためスキップします`);
+    return;
+  }
+  console.log(`${entry.date}: スケジュール申請 (${cfg.schedulePattern} / ${cfg.scheduleDayType})`);
+
+  await openDayRequestPage(
+    view,
+    entry,
+    SEL.schedule.requestOptionText,
+    SEL.schedule.ready,
+    "スケジュール申請フォーム",
+  );
+  // ページ側のJS (パターン変更に連動して勤務日種別を再取得する等) が
+  // 初期化されるのを待つ (直後に操作すると変更イベントを拾えないことがある)
+  await Bun.sleep(1000);
+
+  // 既に申請中ならスキップ (二重申請防止)
+  const pendingId = await view.evaluate(
+    `(document.querySelector(${JSON.stringify(SEL.schedule.requestIdInput)}) || {}).value || ""`,
+  );
+  if (pendingId) {
+    console.log("  申請中のためスキップします");
+    await clickSelector(view, SEL.schedule.back);
+    await waitFor(view, SEL.timecard.ready, "タイムカードへ復帰");
+    return;
+  }
+
+  await selectByText(view, SEL.schedule.patternSelect, cfg.schedulePattern);
+  // パターン連動 (非同期) で勤務日種別の選択肢が更新されるのを待つ
   await waitFor(
     view,
-    `document.querySelector(${JSON.stringify(SEL.edit.typeSelect.replace("{i}", "1"))})`,
-    `${entry.date} 打刻申請フォーム`,
+    `[...document.querySelector(${JSON.stringify(SEL.schedule.dayTypeSelect)}).options]
+      .some(o => o.textContent.includes(${JSON.stringify(cfg.scheduleDayType)}))`,
+    "勤務日種別の選択肢",
   );
+  await selectByText(view, SEL.schedule.dayTypeSelect, cfg.scheduleDayType);
+  try {
+    await setValue(view, SEL.schedule.remarkInput, cfg.remark);
+  } catch {
+    console.log("  (申請理由欄が見つからないためスキップ)");
+  }
+  await shot(view, `20-schedule-${entry.date}`);
+
+  if (cfg.dryRun) {
+    console.log("  [dry-run] 申請ボタンは押さずにタイムカードへ戻ります");
+    await clickSelector(view, SEL.schedule.back);
+  } else {
+    await clickSelector(view, SEL.schedule.submit);
+    await Bun.sleep(500);
+    try {
+      await clickByText(view, "OK", { exact: true });
+    } catch {
+      /* ダイアログ無し */
+    }
+  }
+
+  await waitFor(view, SEL.timecard.ready, "タイムカードへ復帰");
+  if (!cfg.dryRun) console.log("  申請しました");
 }
 
 /**
@@ -185,8 +294,6 @@ export async function fillDay(view: WebViewLike, entry: DayEntry, cfg: KotConfig
     console.log("  [dry-run] 申請ボタンは押さずにタイムカードへ戻ります");
     await clickSelector(view, SEL.edit.back);
   } else {
-    // ヘッドレスでは confirm() が自動キャンセルされ送信が中断されるため無効化する
-    await view.evaluate(`(window.confirm = () => true), (window.alert = () => {}), true`);
     await clickSelector(view, SEL.edit.submit);
     // DOMベースの確認ダイアログが出る設定なら OK 相当のボタンを押す
     await Bun.sleep(500);

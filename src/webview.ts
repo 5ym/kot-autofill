@@ -98,6 +98,16 @@ export async function clickByText(
 }
 
 /**
+ * ネイティブの confirm()/alert() を無効化する (常に OK 相当を返す)。
+ * ヘッドレスではこれらのダイアログが自動キャンセルされ、変更破棄や送信が
+ * 中断されてしまうため、フォームのページに移動するたびに呼ぶ必要がある
+ * (各ページは個別URLへのフル遷移のため、上書きはページ遷移ごとにリセットされる)。
+ */
+export async function disableDialogs(view: WebViewLike) {
+  await view.evaluate(`(window.confirm = () => true), (window.alert = () => {}), true`);
+}
+
+/**
  * セレクタの要素を JS の click() で押す。
  * (KOTのカスタムボタンは hidden input のため view.click の可視性チェックに落ちる)
  */

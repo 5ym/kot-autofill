@@ -11,7 +11,7 @@ if (!existsSync("/.dockerenv") && !process.env.ALLOW_LOCAL) {
   process.exit(1);
 }
 import { parseSheet } from "./csv";
-import { login, openTimecard, fillDay, type KotConfig } from "./kot";
+import { login, openTimecard, fillDay, fillSchedule, type KotConfig } from "./kot";
 import { createView } from "./webview";
 
 const { values: args } = parseArgs({
@@ -21,6 +21,7 @@ const { values: args } = parseArgs({
     day: { type: "string" }, // 特定の日だけ入力 (例 --day 5)
     "dry-run": { type: "boolean", default: false },
     "plan-only": { type: "boolean", default: false },
+    schedule: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
 });
@@ -37,8 +38,11 @@ data.csv に貼り付けて実行する。対象月は日付列から自動で�
   --day N           指定した日だけ入力
   --plan-only       ブラウザを開かず、入力予定の内容だけ表示
   --dry-run         フォーム入力まで行い、申請ボタンは押さない
+  --schedule        打刻申請の代わりにスケジュール申請を行う
+                    (休日設定の日を勤務日扱いにする。平日設定の日はスキップ)
 
-環境変数 (compose.override.yml で設定): KOT_LOGIN_URL, KOT_ID, KOT_PASSWORD, REQUEST_REMARK`);
+環境変数 (compose.override.yml で設定): KOT_LOGIN_URL, KOT_ID, KOT_PASSWORD, REQUEST_REMARK,
+  SCHEDULE_PATTERN (既定: 通常勤務), SCHEDULE_DAY_TYPE (既定: 平日)`);
   process.exit(0);
 }
 
@@ -66,6 +70,8 @@ const cfg: KotConfig = {
   password: process.env.KOT_PASSWORD ?? "",
   remark: process.env.REQUEST_REMARK ?? "勤怠自動入力",
   dryRun: args["dry-run"]!,
+  schedulePattern: process.env.SCHEDULE_PATTERN ?? "通常勤務",
+  scheduleDayType: process.env.SCHEDULE_DAY_TYPE ?? "平日",
 };
 
 // ---- plan-only: ブラウザなしで入力内容を確認 ----
@@ -91,18 +97,22 @@ if (!cfg.id || !cfg.password) {
 const view = createView();
 try {
   await login(view, cfg);
-  await openTimecard(view);
+  await openTimecard(view, year, month);
 
   const failed: string[] = [];
   for (const entry of entries) {
     try {
-      await fillDay(view, entry, cfg);
+      if (args.schedule) {
+        await fillSchedule(view, entry, cfg);
+      } else {
+        await fillDay(view, entry, cfg);
+      }
     } catch (e) {
       console.error(`${entry.date} でエラー: ${e}`);
       failed.push(entry.date);
       // タイムカードへ戻ってから次の日へ
       try {
-        await openTimecard(view);
+        await openTimecard(view, year, month);
       } catch {
         throw new Error("タイムカードへ復帰できないため中断します");
       }
