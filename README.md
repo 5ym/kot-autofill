@@ -46,6 +46,24 @@ docker compose run --rm kot
 
 `--day N` で特定の日だけ入力できる。各ステップのスクリーンショットが `shots/` に残る。
 
+### 休日設定の日に実績がある場合 (スケジュール申請)
+
+CSVの日が KOT 上で所定休日・法定休日などの休日設定になっていると、打刻申請だけでは
+「エラー勤務(全日休暇に対して打刻が行われている)」になり労働時間が集計されない。
+その場合は `--schedule` でスケジュール申請を先に出して勤務日扱いにする
+(休日設定でない日は自動でスキップされる)。
+
+```sh
+docker compose run --rm kot --schedule --dry-run   # リハーサル
+docker compose run --rm kot --schedule             # 本番
+docker compose run --rm kot --dry-run              # (通常どおり) 打刻のリハーサル
+docker compose run --rm kot                        # (通常どおり) 打刻の本番
+```
+
+パターン/勤務日種別は環境変数 `SCHEDULE_PATTERN`(既定: 通常勤務)・
+`SCHEDULE_DAY_TYPE`(既定: 平日)で変更できる。休日出勤扱いにしたい場合などは
+`compose.override.yml` で上書きすること。
+
 ## 重要な注意
 
 - KING OF TIME は**契約・設定によって画面構成やフォーム名が異なる**。
