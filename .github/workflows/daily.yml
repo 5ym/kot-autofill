@@ -1,20 +1,19 @@
 name: daily-kot
 
-# 毎日 0:00 JST (= 前日 15:00 UTC) に、前日分の勤怠を KING OF TIME へ申請する。
+# 毎日 4:00 JST (= 前日 19:00 UTC) に、前日分の勤怠を KING OF TIME へ申請する。
+# (0:00 だと退勤 25:xx〜26:xx の日がまだ稼働中なので、朝方まで待つ)
 #   1. 稼働レポートCSV (その月分) を REPORT_URL から取得
 #   2. 打刻申請 (--date 前日)
 #   3. スケジュール申請 (--schedule --date 前日。休日設定の日だけ実際に送られる)
 # 3 は 2 の後にすること (先に出すと行が [申請中] になり、打刻申請が二重申請防止でスキップされる)。
 #
-# 注意: 稼働が 24 時をまたぐ日 (退勤 25:xx など) は、0:00 の時点ではまだ稼働が終わっていない。
-# その日の退勤が早く確定しすぎる場合は cron を遅らせること (例: 毎日 4:00 JST = "0 19 * * *")。
 # 既に打刻がある日は削除して入れ直すので、再実行しても二重にはならない。
 #
 # 必要な Secrets: KOT_LOGIN_URL / KOT_ID / KOT_PASSWORD / REPORT_URL
 # 任意: REPORT_TOKEN (REPORT_URL へ Bearer で送る) / Variables の REQUEST_REMARK
 on:
   schedule:
-    - cron: "0 15 * * *"
+    - cron: "0 19 * * *"
   workflow_dispatch:
     inputs:
       date:
