@@ -9,8 +9,10 @@ name: daily-kot
 #
 # 既に打刻がある日は削除して入れ直すので、再実行しても二重にはならない。
 #
-# 必要な Secrets: KOT_LOGIN_URL / KOT_ID / KOT_PASSWORD / REPORT_URL
-# 任意: REPORT_TOKEN (REPORT_URL へ Bearer で送る) / Variables の REQUEST_REMARK
+# 必要な Secrets: KOT_LOGIN_URL / KOT_ID / KOT_PASSWORD / REPORT_URL / REPORT_TOKEN
+#   REPORT_URL   = https://w.doany.io/api/reports/{month}.csv  ({month} は対象月 YYYY-MM に置換)
+#   REPORT_TOKEN = worklog のアカウント画面で発行した API キー (wl_…)。Bearer で送る
+# 任意: Variables の REQUEST_REMARK (申請メッセージ)
 on:
   schedule:
     - cron: "0 19 * * *"
