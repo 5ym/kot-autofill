@@ -1,0 +1,110 @@
+name: daily-kot
+
+# 毎日 0:00 JST (= 前日 15:00 UTC) に、前日分の勤怠を KING OF TIME へ申請する。
+#   1. 稼働レポートCSV (その月分) を REPORT_URL から取得
+#   2. 打刻申請 (--date 前日)
+#   3. スケジュール申請 (--schedule --date 前日。休日設定の日だけ実際に送られる)
+# 3 は 2 の後にすること (先に出すと行が [申請中] になり、打刻申請が二重申請防止でスキップされる)。
+#
+# 注意: 稼働が 24 時をまたぐ日 (退勤 25:xx など) は、0:00 の時点ではまだ稼働が終わっていない。
+# その日の退勤が早く確定しすぎる場合は cron を遅らせること (例: 毎日 4:00 JST = "0 19 * * *")。
+# 既に打刻がある日は削除して入れ直すので、再実行しても二重にはならない。
+#
+# 必要な Secrets: KOT_LOGIN_URL / KOT_ID / KOT_PASSWORD / REPORT_URL
+# 任意: REPORT_TOKEN (REPORT_URL へ Bearer で送る) / Variables の REQUEST_REMARK
+on:
+  schedule:
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "対象日 YYYY-MM-DD (空なら前日 JST)"
+        required: false
+        type: string
+      verbose:
+        description: "全ログを表示する (公開リポジトリでは勤怠時刻がログに残る)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kot-autofill
+  cancel-in-progress: false
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 対象日を決める
+        id: target
+        env:
+          INPUT_DATE: ${{ inputs.date }}
+        run: |
+          date="${INPUT_DATE:-$(TZ=Asia/Tokyo date -d yesterday +%F)}"
+          if ! [[ "$date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "対象日の形式が不正です: $date"
+            exit 1
+          fi
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+          echo "month=${date:0:7}" >> "$GITHUB_OUTPUT"
+          echo "対象日: $date"
+
+      - name: 稼働レポートを取得
+        env:
+          REPORT_URL: ${{ secrets.REPORT_URL }}
+          REPORT_TOKEN: ${{ secrets.REPORT_TOKEN }}
+          MONTH: ${{ steps.target.outputs.month }}
+        run: |
+          # REPORT_URL 中の {month} を対象月 (YYYY-MM) に置き換える
+          url="${REPORT_URL//\{month\}/$MONTH}"
+          echo "::add-mask::$url"
+          args=(-fsS --retry 3 --retry-delay 10 -o data.csv)
+          if [ -n "$REPORT_TOKEN" ]; then
+            args+=(-H "Authorization: Bearer $REPORT_TOKEN")
+          fi
+          curl "${args[@]}" "$url"
+          test -s data.csv
+          echo "稼働レポートを取得しました ($(wc -l < data.csv) 行)"
+
+      - name: 打刻申請とスケジュール申請
+        env:
+          KOT_LOGIN_URL: ${{ secrets.KOT_LOGIN_URL }}
+          KOT_ID: ${{ secrets.KOT_ID }}
+          KOT_PASSWORD: ${{ secrets.KOT_PASSWORD }}
+          REQUEST_REMARK: ${{ vars.REQUEST_REMARK }}
+          TARGET_DATE: ${{ steps.target.outputs.date }}
+          VERBOSE: ${{ inputs.verbose }}
+        run: |
+          docker compose build --quiet
+
+          run_kot() {
+            local log rc=0
+            log=$(mktemp)
+            docker compose run --rm -T \
+              -e KOT_LOGIN_URL -e KOT_ID -e KOT_PASSWORD ${REQUEST_REMARK:+-e REQUEST_REMARK} \
+              kot "$@" >"$log" 2>&1 || rc=$?
+            if [ "$VERBOSE" = "true" ]; then
+              cat "$log"
+            else
+              # 公開リポジトリのログに勤怠時刻やセッション付きURLを残さないよう、要約行だけ出す
+              { grep -E '^(完了|失敗した日|  申請しました|  申請中のため|.*でエラー|.*スキップ)' "$log" || true; } \
+                | sed -E 's#https?://[^ ]+#<url>#g'
+            fi
+            if [ "$rc" -ne 0 ]; then
+              echo "終了コード $rc (詳細は verbose=true で手動実行して確認)"
+            fi
+            return "$rc"
+          }
+
+          rc=0
+          echo "== 打刻申請 =="
+          run_kot --date "$TARGET_DATE" || rc=1
+          echo "== スケジュール申請 =="
+          run_kot --schedule --date "$TARGET_DATE" || rc=1
+          exit "$rc"

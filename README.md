@@ -44,7 +44,8 @@ docker compose run --rm kot
 
 `bun run plan` / `dry` / `start` のショートカットも使える(中身は上の docker compose コマンド)。
 
-`--day N` で特定の日だけ入力できる。各ステップのスクリーンショットが `shots/` に残る。
+`--day N` / `--date YYYY-MM-DD` で特定の日だけ入力できる(`--date` はその日の行が無ければ
+何もせず正常終了する)。各ステップのスクリーンショットが `shots/` に残る。
 
 ### 休日設定の日に実績がある場合 (スケジュール申請)
 
@@ -63,6 +64,43 @@ docker compose run --rm kot                        # (通常どおり) 打刻の
 パターン/勤務日種別は環境変数 `SCHEDULE_PATTERN`(既定: 通常勤務)・
 `SCHEDULE_DAY_TYPE`(既定: 平日)で変更できる。休日出勤扱いにしたい場合などは
 `compose.override.yml` で上書きすること。
+
+## 毎日の自動申請 (GitHub Actions)
+
+[.github/workflows/daily.yml](.github/workflows/daily.yml) が毎日 0:00 JST に前日分だけを申請する
+(打刻申請 → 休日設定の日はスケジュール申請)。手動実行(Actions の Run workflow)では
+対象日 `date` を指定でき、`verbose` で全ログを表示できる。
+
+### 必要な設定 (リポジトリの Settings → Secrets and variables → Actions)
+
+| 種別 | 名前 | 内容 |
+| --- | --- | --- |
+| Secret | `KOT_LOGIN_URL` / `KOT_ID` / `KOT_PASSWORD` | `compose.override.yml` と同じ値 |
+| Secret | `REPORT_URL` | その月の稼働レポートCSVを返すURL。`{month}` が対象月 (`YYYY-MM`) に置換される |
+| Secret (任意) | `REPORT_TOKEN` | 設定するとURLへ `Authorization: Bearer` で送る |
+| Variable (任意) | `REQUEST_REMARK` | 申請メッセージ (既定: 勤怠自動入力) |
+
+```sh
+gh secret set KOT_LOGIN_URL   # 値は対話で入力される
+gh secret set KOT_ID
+gh secret set KOT_PASSWORD
+gh secret set REPORT_URL
+```
+
+`REPORT_URL` が返すCSVは `data.csv` と同じ形式 (ヘッダー付き稼働レポート) であること。
+対象日の行が無い日 (休みなど) は何もせず正常終了する。
+
+### 注意
+
+- **公開リポジトリ**なので Actions のログは誰でも読める。通常は要約行だけを出し、勤怠時刻や
+  セッション付きURLはログに残さない(`verbose` を有効にした手動実行を除く)。スクリーンショットは
+  アーティファクトにも上げない。`pull_request` などの外部から起動できるトリガーは付けないこと
+  (Secrets の漏えい防止)。
+- 稼働が 24 時をまたぐ日は 0:00 時点で退勤が確定していない。ずれるなら cron を遅らせる
+  (例: 毎日 4:00 JST = `0 19 * * *`)。打刻済みの日は削除して入れ直すので再実行しても二重にならない。
+- 会社側で IP 制限をしている場合、GitHub のランナーからはログインできない。最初に必ず手動実行で確認する。
+- スケジュール実行は数分〜1時間ほど遅れることがある。また公開リポジトリは60日間リポジトリの
+  活動が無いとスケジュール実行が自動で無効化される。
 
 ## 重要な注意
 

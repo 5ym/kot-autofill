@@ -19,6 +19,7 @@ const { values: args } = parseArgs({
   options: {
     csv: { type: "string", default: "data.csv" },
     day: { type: "string" }, // 特定の日だけ入力 (例 --day 5)
+    date: { type: "string" }, // 特定の日付だけ入力 (例 --date 2026-09-20)。行が無ければ何もせず正常終了
     "dry-run": { type: "boolean", default: false },
     "plan-only": { type: "boolean", default: false },
     schedule: { type: "boolean", default: false },
@@ -36,7 +37,9 @@ data.csv に貼り付けて実行する。対象月は日付列から自動で�
 オプション:
   --csv <file>      入力データ (default: data.csv)。CSV/TSV両対応
   --day N           指定した日だけ入力
-  --plan-only       ブラウザを開かず、入力予定の内容だけ表示
+  --date YYYY-MM-DD 指定した日付だけ入力。その日の行がCSVに無ければ何もせず正常終了
+                    (毎日の自動実行用: 稼働の無い日はスキップ)
+  --plan-only      ブラウザを開かず、入力予定の内容だけ表示
   --dry-run         フォーム入力まで行い、申請ボタンは押さない
   --schedule        打刻申請の代わりにスケジュール申請を行う
                     (休日設定の日を勤務日扱いにする。平日設定の日はスキップ)
@@ -60,6 +63,18 @@ if (args.day) {
   if (entries.length === 0) {
     console.error(`--day ${d} に該当する行がCSVにありません`);
     process.exit(1);
+  }
+}
+if (args.date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+    console.error(`--date は YYYY-MM-DD 形式で指定してください: ${args.date}`);
+    process.exit(1);
+  }
+  entries = entries.filter((e) => e.date === args.date);
+  if (entries.length === 0) {
+    // 稼働の無い日 (休みなど) は異常ではない
+    console.log(`${args.date} の稼働データはCSVに無いためスキップします`);
+    process.exit(0);
   }
 }
 console.log(`対象: ${year}年${month}月 / ${entries.length}日分\n`);
@@ -123,7 +138,10 @@ try {
     `\n完了: ${entries.length - failed.length}/${entries.length} 日分` +
       (cfg.dryRun ? " (dry-run: 申請は未送信)" : ""),
   );
-  if (failed.length) console.log(`失敗した日: ${failed.join(", ")}`);
+  if (failed.length) {
+    console.log(`失敗した日: ${failed.join(", ")}`);
+    process.exitCode = 1; // GitHub Actions などで失敗を検知できるようにする
+  }
 } finally {
   view.close();
 }
