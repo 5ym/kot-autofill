@@ -76,8 +76,8 @@ docker compose run --rm kot                        # (通常どおり) 打刻の
 | 種別 | 名前 | 内容 |
 | --- | --- | --- |
 | Secret | `KOT_LOGIN_URL` / `KOT_ID` / `KOT_PASSWORD` | `compose.override.yml` と同じ値 |
-| Secret | `REPORT_URL` | その月の稼働レポートCSVを返すURL。`{month}` が対象月 (`YYYY-MM`) に置換される |
-| Secret (任意) | `REPORT_TOKEN` | 設定するとURLへ `Authorization: Bearer` で送る |
+| Secret | `REPORT_URL` | 稼働レポートCSVのURL。worklog なら `https://w.doany.io/api/reports/{month}.csv`(`{month}` が対象月 `YYYY-MM` に置換される) |
+| Secret | `REPORT_TOKEN` | worklog のアカウント画面「API キー」で発行したキー(`wl_…`)。`Authorization: Bearer` で送る |
 | Variable (任意) | `REQUEST_REMARK` | 申請メッセージ (既定: 勤怠自動入力) |
 
 ```sh
@@ -88,7 +88,12 @@ gh secret set REPORT_URL
 ```
 
 `REPORT_URL` が返すCSVは `data.csv` と同じ形式 (ヘッダー付き稼働レポート) であること。
+worklog の API は画面の「CSV をダウンロード」と同じものを返す(保存した推定の既定値が効く)。
 対象日の行が無い日 (休みなど) は何もせず正常終了する。
+
+API キーは worklog のアカウント画面で発行する(一度しか表示されないので、そのまま
+`gh secret set REPORT_TOKEN` に貼る)。できるのは稼働表の取得だけなので、漏れても
+worklog 側の連携やアカウントは触れない。漏れた疑いがあれば再発行して Secret を差し替える。
 
 ### 注意
 
