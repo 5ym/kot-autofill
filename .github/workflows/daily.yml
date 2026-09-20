@@ -65,11 +65,26 @@ jobs:
           # REPORT_URL 中の {month} を対象月 (YYYY-MM) に置き換える
           url="${REPORT_URL//\{month\}/$MONTH}"
           echo "::add-mask::$url"
-          args=(-fsS --retry 3 --retry-delay 10 -o data.csv)
+
+          # トークンの形式だけ先に見る (値は出さない)。貼り間違い・前後の空白/改行・
+          # 画面の省略表示 (wl_xxxxxxx…) をそのまま貼った、を 401 の前に切り分けるため
+          if [ -n "$REPORT_TOKEN" ]; then
+            if ! printf '%s' "$REPORT_TOKEN" | grep -qE '^wl_[A-Za-z0-9_-]{43}$'; then
+              echo "::error::REPORT_TOKEN の形式が API キー (wl_ + 43文字) ではありません (長さ ${#REPORT_TOKEN})。worklog のアカウント画面で発行した値をそのまま貼り直してください"
+              exit 1
+            fi
+          fi
+
+          args=(-sS --retry 3 --retry-delay 10 -o data.csv -w '%{http_code}')
           if [ -n "$REPORT_TOKEN" ]; then
             args+=(-H "Authorization: Bearer $REPORT_TOKEN")
           fi
-          curl "${args[@]}" "$url"
+          status=$(curl "${args[@]}" "$url")
+          if [ "$status" != "200" ]; then
+            # 失敗時の本文は worklog の JSON {error} (定型文) なので出してよい
+            echo "::error::稼働レポートの取得に失敗 (HTTP $status): $(head -c 300 data.csv)"
+            exit 1
+          fi
           test -s data.csv
           echo "稼働レポートを取得しました ($(wc -l < data.csv) 行)"
 
