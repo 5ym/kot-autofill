@@ -126,21 +126,19 @@ function openDayEditPage(view: WebViewLike, entry: DayEntry) {
 }
 
 /**
- * 新規打刻行の行番号 (種別 select の id 末尾) を画面の並び順に集めるJS式。
- * 既存打刻の行 (削除チェックボックスを持つ行) と非表示のテンプレート行は除く
- * (絞り込んだ結果が0行になる画面構成なら、絞り込まずに全部返す)。
+ * 新規打刻行の行番号 (種別 select の id / name の末尾) を使う順に集めるJS式。
+ * 「行追加」で増えた行は id が付かないことがあるので name でも拾う。
  * 番号は連番とは限らない (既存打刻がある日は歯抜けになる) ため、順番で扱う。
  */
 const NEW_ROW_IDS = `(() => {
-  const all = [...document.querySelectorAll('select[id^="recording_type_code_"]')];
-  // 非表示のテンプレート行は除く (全部非表示に見える画面構成なら絞り込まない)
-  const visible = all.filter(el => el.offsetParent !== null);
-  const base = visible.length ? visible : all;
-  // 既存打刻の行 (削除チェックボックスを持つ行) は入力先にしない
-  const blank = base.filter(el => !(el.closest("tr") || el).querySelector(${JSON.stringify(SEL.edit.removeCheckbox)}));
-  return (blank.length ? blank : base)
-    .map(el => el.id.slice("recording_type_code_".length))
-    .filter(n => n !== "");
+  const PREFIX = "recording_type_code_";
+  const rows = [...document.querySelectorAll('select[id^="' + PREFIX + '"], select[name^="' + PREFIX + '"]')]
+    // 既存打刻の行 (削除チェックボックスを持つ行) は入力先にしない
+    .filter(el => !(el.closest("tr") || el).querySelector(${JSON.stringify(SEL.edit.removeCheckbox)}));
+  // 表示されている行を先に使う (非表示の行はテンプレートのことがあるので後回し)
+  const sorted = [...rows.filter(el => el.offsetParent !== null), ...rows.filter(el => el.offsetParent === null)];
+  const key = el => (el.name && el.name.startsWith(PREFIX) ? el.name : el.id).slice(PREFIX.length);
+  return [...new Set(sorted.map(key))].filter(n => n !== "");
 })()`;
 
 /**
@@ -183,6 +181,11 @@ async function addRows(view: WebViewLike, need: number): Promise<string[]> {
     const clicked = await view.evaluate(`(() => {
       const el = (${ADD_ROW_CANDIDATES})[${cand}];
       if (!el) return false;
+      // KOTのボタンは mousedown/mouseup に反応するものがあり、click() だけでは動かない
+      const opts = { bubbles: true, cancelable: true, view: window, button: 0 };
+      for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
+        try { el.dispatchEvent(new MouseEvent(type, opts)); } catch (e) { /* 未対応イベントは無視 */ }
+      }
       el.click();
       return true;
     })()`);
@@ -198,13 +201,23 @@ async function addRows(view: WebViewLike, need: number): Promise<string[]> {
   return rowIds;
 }
 
-/** 失敗時に候補ボタンの様子をログへ出す (勤怠時刻は含まないので公開ログに出して良い) */
-function describeAddRowCandidates(view: WebViewLike): Promise<string> {
+/** 失敗時に画面の様子をログへ出す (要素名だけで勤怠時刻は含まないので公開ログに出して良い) */
+function describeAddRow(view: WebViewLike): Promise<string> {
   return view.evaluate(`(() => {
-    const els = (${ADD_ROW_CANDIDATES}).slice(0, 5);
-    if (!els.length) return "候補なし";
-    return els.map(el => el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") +
-      "[" + (el.textContent || el.value || "").replace(/\\s+/g, " ").trim().slice(0, 12) + "]").join(" ");
+    const short = t => (t || "").replace(/\\s+/g, " ").trim();
+    const buttons = (${ADD_ROW_CANDIDATES}).slice(0, 3).map(el =>
+      el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") +
+      "[" + short(el.textContent || el.value).slice(0, 12) + "]" +
+      (el.disabled ? " disabled" : "") + (el.type ? " type=" + el.type : "") +
+      (el.getAttribute("onclick") ? " onclick=" + short(el.getAttribute("onclick")).slice(0, 60) : "")
+    ).join(" | ") || "候補なし";
+    const count = sel => document.querySelectorAll(sel).length;
+    const names = [...new Set([...document.querySelectorAll('[name^="recording_"]')]
+      .map(el => el.name.replace(/[0-9]+$/, "N")))].slice(0, 6).join(",");
+    return buttons +
+      " / 種別select id=" + count('select[id^="recording_type_code_"]') +
+      " name=" + count('select[name^="recording_type_code_"]') +
+      " / 打刻欄: " + names;
   })()`);
 }
 
@@ -347,7 +360,7 @@ export async function fillDay(view: WebViewLike, entry: DayEntry, cfg: KotConfig
     await shot(view, `91-addrow-${entry.date}`);
     throw new Error(
       `打刻行を${records.length}行に増やせませんでした (現在${rowIds.length}行)。` +
-        `行追加ボタン候補: ${await describeAddRowCandidates(view)}`,
+        `画面の状態: ${await describeAddRow(view)}`,
     );
   }
 
