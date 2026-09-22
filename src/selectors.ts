@@ -63,8 +63,10 @@ export const SEL = {
     },
     // 時刻入力欄の形式 (既存行の表示に合わせる)
     timeFormat: "HH:MM" as "HHmm" | "HH:MM",
-    // 打刻行の「行追加」ボタン (初期は4行しかない)
+    // 打刻行の「行追加」ボタン (初期は4行しかない)。
+    // id が違う契約もあるため、見つからなければ addRowTexts の表示テキストで探す
     addRowButton: "#recording_timestamp_add",
+    addRowTexts: ["行追加", "行を追加", "打刻追加", "打刻を追加", "追加"],
     // 既存打刻行の「削除」チェックボックス
     removeCheckbox: `input[name^="remove_timerecord_"]`,
     // 申請理由欄 (行ごと)

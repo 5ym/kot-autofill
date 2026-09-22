@@ -126,6 +126,89 @@ function openDayEditPage(view: WebViewLike, entry: DayEntry) {
 }
 
 /**
+ * 新規打刻行の行番号 (種別 select の id 末尾) を画面の並び順に集めるJS式。
+ * 既存打刻の行 (削除チェックボックスを持つ行) と非表示のテンプレート行は除く
+ * (絞り込んだ結果が0行になる画面構成なら、絞り込まずに全部返す)。
+ * 番号は連番とは限らない (既存打刻がある日は歯抜けになる) ため、順番で扱う。
+ */
+const NEW_ROW_IDS = `(() => {
+  const all = [...document.querySelectorAll('select[id^="recording_type_code_"]')];
+  // 非表示のテンプレート行は除く (全部非表示に見える画面構成なら絞り込まない)
+  const visible = all.filter(el => el.offsetParent !== null);
+  const base = visible.length ? visible : all;
+  // 既存打刻の行 (削除チェックボックスを持つ行) は入力先にしない
+  const blank = base.filter(el => !(el.closest("tr") || el).querySelector(${JSON.stringify(SEL.edit.removeCheckbox)}));
+  return (blank.length ? blank : base)
+    .map(el => el.id.slice("recording_type_code_".length))
+    .filter(n => n !== "");
+})()`;
+
+/**
+ * 「行追加」ボタンの候補を集めるJS式 (先頭が第一候補)。
+ * 契約によって id が違うため、id で見つからなければ表示テキストで探す。
+ */
+const ADD_ROW_CANDIDATES = `(() => {
+  const label = el => ((el.textContent || "") + " " + (el.value || "") + " " + (el.title || "") + " " +
+    [...el.querySelectorAll("img")].map(i => (i.alt || "") + " " + (i.title || "")).join(" ")
+  ).replace(/\\s+/g, " ").trim();
+  const byId = document.querySelector(${JSON.stringify(SEL.edit.addRowButton)});
+  const texts = ${JSON.stringify(SEL.edit.addRowTexts)};
+  const byText = [...document.querySelectorAll(
+      "a, button, input[type=button], input[type=submit], [onclick], [class*=btn], [class*=button]")]
+    .filter(el => el !== byId && el.offsetParent !== null)
+    .filter(el => {
+      const t = label(el);
+      // 「追加」を含む短いラベルだけ。申請・削除などの別ボタンは押さない
+      return t.length > 0 && t.length <= 12 && texts.some(x => t.includes(x)) && !/削除|申請|戻|検索/.test(t);
+    })
+    .sort((a, b) => label(a).length - label(b).length);
+  return byId ? [byId, ...byText] : byText;
+})()`;
+
+function listNewRowIds(view: WebViewLike): Promise<string[]> {
+  return view.evaluate(NEW_ROW_IDS);
+}
+
+/**
+ * 打刻行が need 行になるまで「行追加」を押す。
+ * 行追加が同期とは限らない (KOT側のJSが後から行を作る) ため、1回押すごとに
+ * 行が増えるのを待つ。一度の evaluate 内で連打しても DOM には反映されない。
+ * 押しても増えないボタンは諦めて次の候補を試す。
+ */
+async function addRows(view: WebViewLike, need: number): Promise<string[]> {
+  let rowIds = await listNewRowIds(view);
+  let cand = 0;
+  for (let guard = 0; guard < 60 && rowIds.length < need; guard++) {
+    const before = rowIds.length;
+    const clicked = await view.evaluate(`(() => {
+      const el = (${ADD_ROW_CANDIDATES})[${cand}];
+      if (!el) return false;
+      el.click();
+      return true;
+    })()`);
+    if (!clicked) break; // 候補が尽きた
+    try {
+      await waitFor(view, `${NEW_ROW_IDS}.length > ${before}`, "打刻行の追加", 5_000);
+    } catch {
+      cand++; // このボタンでは増えない
+      continue;
+    }
+    rowIds = await listNewRowIds(view);
+  }
+  return rowIds;
+}
+
+/** 失敗時に候補ボタンの様子をログへ出す (勤怠時刻は含まないので公開ログに出して良い) */
+function describeAddRowCandidates(view: WebViewLike): Promise<string> {
+  return view.evaluate(`(() => {
+    const els = (${ADD_ROW_CANDIDATES}).slice(0, 5);
+    if (!els.length) return "候補なし";
+    return els.map(el => el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") +
+      "[" + (el.textContent || el.value || "").replace(/\\s+/g, " ").trim().slice(0, 12) + "]").join(" ");
+  })()`);
+}
+
+/**
  * 休日設定の日にスケジュール申請を出して勤務日扱いにする。
  * パターンと勤務日種別は cfg.schedulePattern / cfg.scheduleDayType (時刻はパターンの既定値)。
  * 平日設定の日と申請中の日はスキップする。
@@ -219,19 +302,24 @@ export async function fillDay(view: WebViewLike, entry: DayEntry, cfg: KotConfig
     `${entry.date}: 出勤 ${entry.start} / 休憩 ${brk || "なし"} / 退勤 ${entry.end}`,
   );
 
-  // 既に申請中 ([申] マーク) の日は二重申請を避けてスキップ
+  await openDayEditPage(view, entry);
+  await shot(view, `10-edit-${entry.date}`);
+
+  // 既に打刻申請が出ている日は二重申請を避けてスキップする。
+  // タイムカード行の [申] はスケジュール申請でも付くため、行の表示ではなく
+  // 申請フォームに残っている申請ID で判定する
+  // (スケジュール申請中なだけの日は、打刻申請はまだなので続行する)。
   const pending = await view.evaluate(`(() => {
-    const d = document.querySelector('input[name="working_date"][value="${entry.date.replaceAll("-", "")}"]');
-    const row = d && d.closest("tr");
-    return !!row && row.innerText.includes("[申]");
+    return [...document.querySelectorAll('input[name*="request_id"]')]
+      .filter(el => !/schedule/i.test(el.name))
+      .some(el => el.value && el.value !== "0");
   })()`);
   if (pending) {
     console.log("  申請中のためスキップします");
+    await clickSelector(view, SEL.edit.back);
+    await waitFor(view, SEL.timecard.ready, "タイムカードへ復帰");
     return;
   }
-
-  await openDayEditPage(view, entry);
-  await shot(view, `10-edit-${entry.date}`);
 
   // 既存の打刻がある日は削除チェックを入れ、CSVの内容で入れ直す
   const oldNum = await view.evaluate(
@@ -253,22 +341,14 @@ export async function fillDay(view: WebViewLike, entry: DayEntry, cfg: KotConfig
       })`);
   }
 
-  // 新規打刻行が足りなければ「行追加」ボタンで増やす (初期4行)。
-  // 行番号は連番とは限らない (既存打刻がある日は歯抜けになる) ため、
-  // 実際に存在する番号を集めてその順に埋める
-  const rowIds: string[] = await view.evaluate(`(() => {
-    const ids = () => [...document.querySelectorAll('select[id^="recording_type_code_"]')]
-      .map(el => el.id.slice("recording_type_code_".length))
-      .filter(n => /^\\d+$/.test(n));
-    for (let guard = 0; guard < 40 && ids().length < ${records.length}; guard++) {
-      const add = document.querySelector(${JSON.stringify(SEL.edit.addRowButton)});
-      if (!add) break;
-      add.click();
-    }
-    return ids();
-  })()`);
+  // 新規打刻行が足りなければ「行追加」ボタンで増やす (初期4行)
+  const rowIds = await addRows(view, records.length);
   if (rowIds.length < records.length) {
-    throw new Error(`打刻行を${records.length}行に増やせませんでした (現在${rowIds.length}行)`);
+    await shot(view, `91-addrow-${entry.date}`);
+    throw new Error(
+      `打刻行を${records.length}行に増やせませんでした (現在${rowIds.length}行)。` +
+        `行追加ボタン候補: ${await describeAddRowCandidates(view)}`,
+    );
   }
 
   for (let i = 0; i < records.length; i++) {
