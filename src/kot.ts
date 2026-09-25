@@ -111,6 +111,10 @@ async function openDayRequestPage(
     );
   }
   await waitFor(view, readyExpr, `${entry.date} ${label}`);
+  // フォームの要素はサーバー描画の HTML に最初から入っているが、行追加やパターン連動を
+  // 担う外部 JS は後から読み込まれる。GitHub Actions のランナー (海外・低速) では
+  // ここを待たずに操作すると onclick の関数が未定義で空振りし、行が増えない。
+  await waitFor(view, `document.readyState === "complete"`, `${entry.date} ページの読み込み完了`, 60_000);
   // 個別ページへのフル遷移のたびに confirm()/alert() を無効化し直す必要がある
   await disableDialogs(view);
 }
@@ -138,7 +142,9 @@ const NEW_ROW_IDS = `(() => {
   // 表示されている行を先に使う (非表示の行はテンプレートのことがあるので後回し)
   const sorted = [...rows.filter(el => el.offsetParent !== null), ...rows.filter(el => el.offsetParent === null)];
   const key = el => (el.name && el.name.startsWith(PREFIX) ? el.name : el.id).slice(PREFIX.length);
-  return [...new Set(sorted.map(key))].filter(n => n !== "");
+  // 行追加の雛形 (recording_type_code_{{count}}) は行ではないので数えない。
+  // 数えると「4行しか無いのに5行ある」と見えて、足りない原因を見誤る
+  return [...new Set(sorted.map(key))].filter(n => n !== "" && !n.includes("{{"));
 })()`;
 
 /**
@@ -179,7 +185,13 @@ async function addRows(view: WebViewLike, need: number): Promise<string[]> {
   for (let guard = 0; guard < 60 && rowIds.length < need; guard++) {
     const before = rowIds.length;
     const clicked = await view.evaluate(`(() => {
-      const el = (${ADD_ROW_CANDIDATES})[${cand}];
+      // 第一候補はボタンの onclick が呼ぶページ側の関数そのもの。ボタンのイベント経路に
+      // 依存しないので確実で、未定義なら (JS 未読み込み・画面構成が違う) ボタンに落ちる
+      const fn = window[${JSON.stringify(SEL.edit.addRowFunction)}];
+      const useFn = typeof fn === "function";
+      const idx = ${cand};
+      if (useFn && idx === 0) { fn(); return true; }
+      const el = (${ADD_ROW_CANDIDATES})[useFn ? idx - 1 : idx];
       if (!el) return false;
       // KOTのボタンは mousedown/mouseup に反応するものがあり、click() だけでは動かない
       const opts = { bubbles: true, cancelable: true, view: window, button: 0 };

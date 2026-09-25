@@ -67,6 +67,9 @@ export const SEL = {
     // id が違う契約もあるため、見つからなければ addRowTexts の表示テキストで探す
     addRowButton: "#recording_timestamp_add",
     addRowTexts: ["行追加", "行を追加", "打刻追加", "打刻を追加", "追加"],
+    // 行追加ボタンの onclick が呼ぶページ側の関数 (実画面: onclick="recordingTimestampAddinputHtml();")。
+    // 定義されていればボタンを押す代わりに直接呼ぶ
+    addRowFunction: "recordingTimestampAddinputHtml",
     // 既存打刻行の「削除」チェックボックス
     removeCheckbox: `input[name^="remove_timerecord_"]`,
     // 申請理由欄 (行ごと)
