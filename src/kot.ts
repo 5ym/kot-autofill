@@ -1,6 +1,6 @@
 import { SEL } from "./selectors";
 import type { DayEntry } from "./csv";
-import { formatForInput } from "./time";
+import { applyMinWork, formatForInput } from "./time";
 import {
   type WebViewLike,
   waitFor,
@@ -20,6 +20,8 @@ export interface KotConfig {
   dryRun: boolean; // true なら申請ボタンを押さない
   schedulePattern: string; // --schedule で使うスケジュールパターン名
   scheduleDayType: string; // --schedule で使う勤務日種別
+  /** 実働がこれ (分) に満たない日は推定休憩を外して出勤〜退勤だけで申請する。0 なら無効 */
+  minWorkMinutes: number;
 }
 
 export async function login(view: WebViewLike, cfg: KotConfig) {
@@ -311,7 +313,9 @@ export async function fillSchedule(view: WebViewLike, entry: DayEntry, cfg: KotC
  * 1日分 (出勤・退勤・各休憩の開始/終了) を打刻申請する。
  * 既存の打刻が入っている日は削除チェックを入れて全打刻を入れ直す。
  */
-export async function fillDay(view: WebViewLike, entry: DayEntry, cfg: KotConfig) {
+export async function fillDay(view: WebViewLike, original: DayEntry, cfg: KotConfig) {
+  // 実働が短い日は推定休憩を信じない (出勤・退勤はログのまま)
+  const { entry, adjusted } = applyMinWork(original, cfg.minWorkMinutes);
   const records: Array<[label: string, time: string]> = [
     [SEL.edit.typeLabels.clockIn, entry.start],
   ];
@@ -326,6 +330,14 @@ export async function fillDay(view: WebViewLike, entry: DayEntry, cfg: KotConfig
   console.log(
     `${entry.date}: 出勤 ${entry.start} / 休憩 ${brk || "なし"} / 退勤 ${entry.end}`,
   );
+  // 公開ログに出す要約行 (インデント行) なので時間の数字は書かない
+  if (cfg.minWorkMinutes > 0) {
+    console.log(
+      adjusted
+        ? "  実働が MIN_WORK_HOURS 未満のため、推定休憩を外して出勤〜退勤のみで申請します"
+        : "  実働は MIN_WORK_HOURS 以上のため、休憩は推定のまま申請します",
+    );
+  }
 
   await openDayEditPage(view, entry);
   await shot(view, `10-edit-${entry.date}`);

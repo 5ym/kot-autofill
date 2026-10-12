@@ -13,7 +13,8 @@ name: daily-kot
 # 必要な Secrets: KOT_LOGIN_URL / KOT_ID / KOT_PASSWORD / REPORT_URL / REPORT_TOKEN
 #   REPORT_URL   = https://w.doany.io/api/reports/{month}.csv  ({month} は対象月 YYYY-MM に置換)
 #   REPORT_TOKEN = worklog のアカウント画面で発行した API キー (wl_…)。Bearer で送る
-# 任意: Variables の REQUEST_REMARK (申請メッセージ)
+# 任意: Variables の REQUEST_REMARK (申請メッセージ) /
+#       MIN_WORK_HOURS (例 8。実働がこれ未満の日は推定休憩を外し、出勤〜退勤のみで申請)
 on:
   schedule:
     - cron: "0 19 * * *"
@@ -23,6 +24,11 @@ on:
         description: "対象日 YYYY-MM-DD (空なら前日 JST)"
         required: false
         type: string
+      dry_run:
+        description: "フォーム入力までで申請ボタンは押さない (動作確認用)"
+        required: false
+        type: boolean
+        default: false
       verbose:
         description: "全ログを表示する (公開リポジトリでは勤怠時刻がログに残る)"
         required: false
@@ -95,17 +101,27 @@ jobs:
           KOT_ID: ${{ secrets.KOT_ID }}
           KOT_PASSWORD: ${{ secrets.KOT_PASSWORD }}
           REQUEST_REMARK: ${{ vars.REQUEST_REMARK }}
+          MIN_WORK_HOURS: ${{ vars.MIN_WORK_HOURS }}
           TARGET_DATE: ${{ steps.target.outputs.date }}
+          DRY_RUN: ${{ inputs.dry_run }}
           VERBOSE: ${{ inputs.verbose }}
         run: |
           docker compose build --quiet
+
+          # 動作確認用。申請ボタンは押さず、フォーム入力まで行って戻る
+          extra=()
+          if [ "$DRY_RUN" = "true" ]; then
+            extra+=(--dry-run)
+            echo "(dry-run: 申請は送信しません)"
+          fi
 
           run_kot() {
             local log rc=0
             log=$(mktemp)
             docker compose run --rm -T \
-              -e KOT_LOGIN_URL -e KOT_ID -e KOT_PASSWORD ${REQUEST_REMARK:+-e REQUEST_REMARK} \
-              kot "$@" >"$log" 2>&1 || rc=$?
+              -e KOT_LOGIN_URL -e KOT_ID -e KOT_PASSWORD \
+              ${REQUEST_REMARK:+-e REQUEST_REMARK} ${MIN_WORK_HOURS:+-e MIN_WORK_HOURS} \
+              kot "$@" "${extra[@]}" >"$log" 2>&1 || rc=$?
             if [ "$VERBOSE" = "true" ]; then
               cat "$log"
             else

@@ -13,6 +13,7 @@ if (!existsSync("/.dockerenv") && !process.env.ALLOW_LOCAL) {
 import { parseSheet } from "./csv";
 import { login, openTimecard, fillDay, fillSchedule, type KotConfig } from "./kot";
 import { createView } from "./webview";
+import { applyMinWork, toHHMM, workMinutes } from "./time";
 
 const { values: args } = parseArgs({
   args: Bun.argv.slice(2),
@@ -45,7 +46,8 @@ data.csv に貼り付けて実行する。対象月は日付列から自動で�
                     (休日設定の日を勤務日扱いにする。平日設定の日はスキップ)
 
 環境変数 (compose.override.yml で設定): KOT_LOGIN_URL, KOT_ID, KOT_PASSWORD, REQUEST_REMARK,
-  SCHEDULE_PATTERN (既定: 通常勤務), SCHEDULE_DAY_TYPE (既定: 平日)`);
+  SCHEDULE_PATTERN (既定: 通常勤務), SCHEDULE_DAY_TYPE (既定: 平日),
+  MIN_WORK_HOURS (例: 8。実働がこれに満たない日は推定休憩を外し、出勤〜退勤のみで申請。未設定なら無効)`);
   process.exit(0);
 }
 
@@ -79,6 +81,13 @@ if (args.date) {
 }
 console.log(`対象: ${year}年${month}月 / ${entries.length}日分\n`);
 
+// 実働の下限 (時間)。"8" や "7.5"。未設定・空なら無効
+const minWorkHours = Number(process.env.MIN_WORK_HOURS || 0);
+if (!Number.isFinite(minWorkHours) || minWorkHours < 0 || minWorkHours > 24) {
+  console.error(`MIN_WORK_HOURS は 0〜24 の数値で指定してください: ${process.env.MIN_WORK_HOURS}`);
+  process.exit(1);
+}
+
 const cfg: KotConfig = {
   loginUrl: process.env.KOT_LOGIN_URL ?? "https://s3.kingtime.jp/independent/",
   id: process.env.KOT_ID ?? "",
@@ -87,14 +96,17 @@ const cfg: KotConfig = {
   dryRun: args["dry-run"]!,
   schedulePattern: process.env.SCHEDULE_PATTERN ?? "通常勤務",
   scheduleDayType: process.env.SCHEDULE_DAY_TYPE ?? "平日",
+  minWorkMinutes: Math.round(minWorkHours * 60),
 };
 
 // ---- plan-only: ブラウザなしで入力内容を確認 ----
 if (args["plan-only"]) {
-  for (const e of entries) {
+  for (const original of entries) {
+    const { entry: e, adjusted } = applyMinWork(original, cfg.minWorkMinutes);
     const brk = e.breaks.map((b) => `${b.start}-${b.end}`).join(", ");
     console.log(
-      `${e.date}  出勤 ${e.start} → 退勤 ${e.end}  休憩 ${brk || "なし"}`,
+      `${e.date}  出勤 ${e.start} → 退勤 ${e.end}  休憩 ${brk || "なし"}  実働 ${toHHMM(workMinutes(e))}` +
+        (adjusted ? `  (推定休憩込みだと実働 ${toHHMM(workMinutes(original))} で MIN_WORK_HOURS 未満のため、休憩を外した)` : ""),
     );
   }
   process.exit(0);

@@ -29,6 +29,11 @@ docker compose build                                   # 初回とコード変�
 **既に打刻が入っている日は、既存打刻に削除チェックを入れて CSV の内容で入れ直す**
 (承認済みの打刻も対象になるので、`--dry-run` のスクリーンショットで必ず確認すること)。
 
+`MIN_WORK_HOURS=8` を設定すると、実働(退勤 − 出勤 − 休憩)が 8 時間に満たない日は
+**推定の休憩を外して、出勤〜退勤だけで申請する**。稼働レポートの休憩は活動ログの空白からの
+推定なので、会議やコーディングでログに残る出力が少なかった日は働いていた時間が休憩に化ける。
+その日はログの最初と最後だけを使う(時刻を作りはしない)。`--plan-only` でどの日が対象か分かる。
+
 ## 使い方(この順で試すのがおすすめ)
 
 ```sh
@@ -79,6 +84,10 @@ docker compose run --rm kot                        # (通常どおり) 打刻の
 | Secret | `REPORT_URL` | 稼働レポートCSVのURL。worklog なら `https://w.doany.io/api/reports/{month}.csv`(`{month}` が対象月 `YYYY-MM` に置換される) |
 | Secret | `REPORT_TOKEN` | worklog のアカウント画面「API キー」で発行したキー(`wl_…`)。`Authorization: Bearer` で送る |
 | Variable (任意) | `REQUEST_REMARK` | 申請メッセージ (既定: 勤怠自動入力) |
+| Variable (任意) | `MIN_WORK_HOURS` | 実働がこれ (時間) に満たない日は推定休憩を外して申請する (例: `8`) |
+
+手動実行(Run workflow)では `date` で対象日、`dry_run` で申請ボタンを押さない動作確認、
+`verbose` で全ログ表示が選べる。
 
 ```sh
 gh secret set KOT_LOGIN_URL   # 値は対話で入力される
