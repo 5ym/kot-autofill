@@ -363,6 +363,25 @@ export async function fillDay(view: WebViewLike, original: DayEntry, cfg: KotCon
     `Number((document.querySelector('input[name="old_timerecord_num"]') || {}).value || 0)`,
   );
   if (oldNum > 0) {
+    // 既存の打刻がこれから申請する内容と同じなら何もしない。
+    // 再実行や設定変更後のやり直しで、変わらない日まで「削除して同じものを入れ直す」申請を
+    // 飛ばさないため (承認者の画面に同じ内容の申請が並ぶだけで意味がない)。
+    const existing: string[] = await view.evaluate(`[...document.querySelectorAll(${JSON.stringify(SEL.edit.removeCheckbox)})]
+      .map(cb => cb.closest("tr"))
+      .filter(Boolean)
+      .map(tr => {
+        const sel = tr.querySelector('select[name^="recording_type_code_"]');
+        const time = tr.querySelector('input[name^="recording_timestamp_time_"]');
+        const label = sel && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent.trim() : "";
+        return label + " " + ((time && time.value) || "").trim();
+      })`);
+    const planned = records.map(([label, time]) => `${label} ${formatForInput(time, "HH:MM")}`);
+    if (existing.length === planned.length && [...existing].sort().join("|") === [...planned].sort().join("|")) {
+      console.log("  既存の打刻と同じ内容のため申請しません");
+      await clickSelector(view, SEL.edit.back);
+      await waitFor(view, SEL.timecard.ready, "タイムカードへ復帰");
+      return;
+    }
     console.log(`  既存の打刻${oldNum}件に削除チェックを入れて入れ直します`);
     await view.evaluate(`[...document.querySelectorAll(${JSON.stringify(SEL.edit.removeCheckbox)})]
       .forEach(el => {
