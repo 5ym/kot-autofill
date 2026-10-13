@@ -24,19 +24,35 @@ export interface KotConfig {
   minWorkMinutes: number;
 }
 
+/** ログイン後の応答待ち。ランナー (海外・低速) では既定の 20 秒に収まらない日がある */
+const LOGIN_TIMEOUT_MS = 60_000;
+const LOGIN_ATTEMPTS = 3;
+
 export async function login(view: WebViewLike, cfg: KotConfig) {
-  console.log(`ログインページへ移動: ${cfg.loginUrl}`);
-  await view.navigate(cfg.loginUrl);
-  await waitFor(view, `document.querySelector(${JSON.stringify(SEL.login.id)})`, "ログインフォーム");
-  await shot(view, "01-login-page");
+  for (let attempt = 1; attempt <= LOGIN_ATTEMPTS; attempt++) {
+    console.log(`ログインページへ移動: ${cfg.loginUrl}`);
+    await view.navigate(cfg.loginUrl);
+    await waitFor(view, `document.querySelector(${JSON.stringify(SEL.login.id)})`, "ログインフォーム", LOGIN_TIMEOUT_MS);
+    await shot(view, "01-login-page");
 
-  await setValue(view, SEL.login.id, cfg.id);
-  await setValue(view, SEL.login.password, cfg.password);
-  await view.click(SEL.login.submit);
+    await setValue(view, SEL.login.id, cfg.id);
+    await setValue(view, SEL.login.password, cfg.password);
+    await view.click(SEL.login.submit);
 
-  await waitFor(view, SEL.login.loggedIn, "ログイン完了");
-  await shot(view, "02-after-login");
-  console.log("ログイン成功");
+    try {
+      await waitFor(view, SEL.login.loggedIn, "ログイン完了", LOGIN_TIMEOUT_MS);
+    } catch (e) {
+      // 一時的な遅延や KOT 側の詰まりで戻ってこないことがある。ページを開き直してやり直す
+      // (ID/パスワードが違う場合もここに来るが、それは3回やっても同じなので最後に落ちる)
+      await shot(view, `02-login-timeout-${attempt}`);
+      if (attempt === LOGIN_ATTEMPTS) throw e;
+      console.log(`  ログインの応答待ちがタイムアウトしたのでやり直します (${attempt}/${LOGIN_ATTEMPTS})`);
+      continue;
+    }
+    await shot(view, "02-after-login");
+    console.log("ログイン成功");
+    return;
+  }
 }
 
 export async function openTimecard(view: WebViewLike, year: number, month: number) {

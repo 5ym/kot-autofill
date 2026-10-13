@@ -138,9 +138,18 @@ jobs:
             return "$rc"
           }
 
+          # 一時的な失敗 (ログインの応答待ちなど) は少し置いて1回だけやり直す。
+          # 申請済み・内容が同じ日はスキップされるので、やり直しで二重申請にはならない
+          run_with_retry() {
+            run_kot "$@" && return 0
+            echo "  30秒後にやり直します"
+            sleep 30
+            run_kot "$@"
+          }
+
           rc=0
           echo "== 打刻申請 =="
-          run_kot --date "$TARGET_DATE" || rc=1
+          run_with_retry --date "$TARGET_DATE" || rc=1
           echo "== スケジュール申請 =="
-          run_kot --schedule --date "$TARGET_DATE" || rc=1
+          run_with_retry --schedule --date "$TARGET_DATE" || rc=1
           exit "$rc"
