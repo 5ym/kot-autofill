@@ -47,7 +47,7 @@ concurrency:
 jobs:
   submit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -140,12 +140,16 @@ jobs:
             return "$rc"
           }
 
-          # 一時的な失敗 (ログインの応答待ちなど) は少し置いて1回だけやり直す。
+          # 一時的な失敗 (ログインの応答待ちなど) は少し置いて、コンテナから起動し直して最大 3 回やり直す。
+          # ログインの OK に反応しない状態は同じブラウザでは戻らず、起動し直すと通る (src/kot.ts の login)。
           # 申請済み・内容が同じ日はスキップされるので、やり直しで二重申請にはならない
           run_with_retry() {
-            run_kot "$@" && return 0
-            echo "  30秒後にやり直します"
-            sleep 30
+            local i
+            for i in 1 2 3; do
+              run_kot "$@" && return 0
+              echo "  30秒後にコンテナから起動し直してやり直します ($i/3)"
+              sleep 30
+            done
             run_kot "$@"
           }
 

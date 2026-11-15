@@ -24,65 +24,36 @@ export interface KotConfig {
   minWorkMinutes: number;
 }
 
-/** ログイン後の応答待ち。ランナー (海外・低速) では既定の 20 秒に収まらない日がある */
-const LOGIN_TIMEOUT_MS = 60_000;
-const LOGIN_ATTEMPTS = 3;
-
-export async function login(view: WebViewLike, cfg: KotConfig) {
-  for (let attempt = 1; attempt <= LOGIN_ATTEMPTS; attempt++) {
-    console.log(`ログインページへ移動: ${cfg.loginUrl}`);
-    await view.navigate(cfg.loginUrl);
-    await waitFor(view, `document.querySelector(${JSON.stringify(SEL.login.id)})`, "ログインフォーム", LOGIN_TIMEOUT_MS);
-    await shot(view, "01-login-page");
-
-    try {
-      await submitLogin(view, cfg);
-    } catch (e) {
-      // 一時的な遅延や KOT 側の詰まりで戻ってこないことがある。ページを開き直してやり直す
-      // (ID/パスワードが違う場合もここに来るが、それは3回やっても同じなので最後に落ちる)
-      await shot(view, `02-login-timeout-${attempt}`);
-      console.log(`  ログイン待ちの画面: ${await describeLoginState(view)}`);
-      if (attempt === LOGIN_ATTEMPTS) throw e;
-      console.log(`  ログインの応答待ちがタイムアウトしたのでやり直します (${attempt}/${LOGIN_ATTEMPTS})`);
-      continue;
-    }
-    await shot(view, "02-after-login");
-    console.log("ログイン成功");
-    return;
-  }
-}
-
-/** 1回の押下でログイン後の画面に移るのを待つ時間。過ぎても画面がそのままなら押し直す */
-const LOGIN_CLICK_WAIT_MS = 10_000;
+/** ログインの画面・ログイン後の応答待ち。ランナー (海外・低速) では既定の 20 秒に収まらない日がある */
+const LOGIN_TIMEOUT_MS = 30_000;
 
 /**
- * ID とパスワードを入れて OK を押し、ログイン後の画面になるまで待つ。
+ * ログインする。やり直しはしない。
  *
- * レコーダーのログイン画面は読み込み後もしばらく画面側の初期化が続き、その間に押した OK は
- * 何も起こさない (ランナーで 1 日おきに 3 回とも落ちた。落ちた画面はログイン画面のまま・入力済み・
- * ボタンは押せる・エラー表示なし)。押してもログイン画面のままなら、入れ直して押し直す。
+ * ランナーではログインの OK を押しても何も起こらない状態に当たることがある
+ * (2026-11 に 1 日おき。画面はログイン画面のまま・入力済み・ボタンは押せる・エラー表示なし)。
+ * そうなると同じブラウザでは押し直しても、ページを開き直しても、WebView を作り直しても
+ * (Chromium のプロセスは同じものが使われる) 戻らず、コンテナから起動し直すと通る。
+ * そのため、やり直しはワークフロー側でコンテナごと行う (daily.yml の run_with_retry)。
  */
-async function submitLogin(view: WebViewLike, cfg: KotConfig) {
-  const t0 = Date.now();
-  while (true) {
-    await waitFor(view, buttonClickable(SEL.login.submit), "ログインボタン", LOGIN_TIMEOUT_MS);
-    await setValue(view, SEL.login.id, cfg.id);
-    await setValue(view, SEL.login.password, cfg.password);
-    await view.click(SEL.login.submit);
-    const left = LOGIN_TIMEOUT_MS - (Date.now() - t0);
-    try {
-      await waitFor(view, SEL.login.loggedIn, "ログイン完了", Math.min(LOGIN_CLICK_WAIT_MS, Math.max(left, 0)));
-      return;
-    } catch (e) {
-      if (Date.now() - t0 >= LOGIN_TIMEOUT_MS) throw e;
-      // ログイン中の画面遷移の途中なら押し直さない (フォームが消えていればそのまま待つ)
-      if (!(await view.evaluate(`!!document.querySelector(${JSON.stringify(SEL.login.password)})`).catch(() => false))) {
-        await waitFor(view, SEL.login.loggedIn, "ログイン完了", Math.max(LOGIN_TIMEOUT_MS - (Date.now() - t0), 0));
-        return;
-      }
-      console.log("  OK を押してもログイン画面のままなので押し直します");
-    }
+export async function login(view: WebViewLike, cfg: KotConfig) {
+  console.log(`ログインページへ移動: ${cfg.loginUrl}`);
+  await view.navigate(cfg.loginUrl);
+  await waitFor(view, buttonClickable(SEL.login.submit), "ログインフォーム", LOGIN_TIMEOUT_MS);
+  await shot(view, "01-login-page");
+  await setValue(view, SEL.login.id, cfg.id);
+  await setValue(view, SEL.login.password, cfg.password);
+  await view.click(SEL.login.submit);
+  try {
+    await waitFor(view, SEL.login.loggedIn, "ログイン完了", LOGIN_TIMEOUT_MS);
+  } catch (e) {
+    // ID/パスワードが違う場合もここに来る
+    await shot(view, "02-login-timeout");
+    console.log(`  ログイン待ちの画面: ${await describeLoginState(view)}`);
+    throw e;
   }
+  await shot(view, "02-after-login");
+  console.log("ログイン成功");
 }
 
 /** 要素が表示されていて、中央を他の要素に覆われていない (実際のクリックが届く) */
