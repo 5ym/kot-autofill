@@ -35,12 +35,8 @@ export async function login(view: WebViewLike, cfg: KotConfig) {
     await waitFor(view, `document.querySelector(${JSON.stringify(SEL.login.id)})`, "ログインフォーム", LOGIN_TIMEOUT_MS);
     await shot(view, "01-login-page");
 
-    await setValue(view, SEL.login.id, cfg.id);
-    await setValue(view, SEL.login.password, cfg.password);
-    await view.click(SEL.login.submit);
-
     try {
-      await waitFor(view, SEL.login.loggedIn, "ログイン完了", LOGIN_TIMEOUT_MS);
+      await submitLogin(view, cfg);
     } catch (e) {
       // 一時的な遅延や KOT 側の詰まりで戻ってこないことがある。ページを開き直してやり直す
       // (ID/パスワードが違う場合もここに来るが、それは3回やっても同じなので最後に落ちる)
@@ -54,6 +50,51 @@ export async function login(view: WebViewLike, cfg: KotConfig) {
     console.log("ログイン成功");
     return;
   }
+}
+
+/** 1回の押下でログイン後の画面に移るのを待つ時間。過ぎても画面がそのままなら押し直す */
+const LOGIN_CLICK_WAIT_MS = 10_000;
+
+/**
+ * ID とパスワードを入れて OK を押し、ログイン後の画面になるまで待つ。
+ *
+ * レコーダーのログイン画面は読み込み後もしばらく画面側の初期化が続き、その間に押した OK は
+ * 何も起こさない (ランナーで 1 日おきに 3 回とも落ちた。落ちた画面はログイン画面のまま・入力済み・
+ * ボタンは押せる・エラー表示なし)。押してもログイン画面のままなら、入れ直して押し直す。
+ */
+async function submitLogin(view: WebViewLike, cfg: KotConfig) {
+  const t0 = Date.now();
+  while (true) {
+    await waitFor(view, buttonClickable(SEL.login.submit), "ログインボタン", LOGIN_TIMEOUT_MS);
+    await setValue(view, SEL.login.id, cfg.id);
+    await setValue(view, SEL.login.password, cfg.password);
+    await view.click(SEL.login.submit);
+    const left = LOGIN_TIMEOUT_MS - (Date.now() - t0);
+    try {
+      await waitFor(view, SEL.login.loggedIn, "ログイン完了", Math.min(LOGIN_CLICK_WAIT_MS, Math.max(left, 0)));
+      return;
+    } catch (e) {
+      if (Date.now() - t0 >= LOGIN_TIMEOUT_MS) throw e;
+      // ログイン中の画面遷移の途中なら押し直さない (フォームが消えていればそのまま待つ)
+      if (!(await view.evaluate(`!!document.querySelector(${JSON.stringify(SEL.login.password)})`).catch(() => false))) {
+        await waitFor(view, SEL.login.loggedIn, "ログイン完了", Math.max(LOGIN_TIMEOUT_MS - (Date.now() - t0), 0));
+        return;
+      }
+      console.log("  OK を押してもログイン画面のままなので押し直します");
+    }
+  }
+}
+
+/** 要素が表示されていて、中央を他の要素に覆われていない (実際のクリックが届く) */
+function buttonClickable(selector: string): string {
+  return `(() => {
+    const b = document.querySelector(${JSON.stringify(selector)});
+    if (!b) return false;
+    const r = b.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return !!hit && (b === hit || b.contains(hit));
+  })()`;
 }
 
 /**
