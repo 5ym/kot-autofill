@@ -45,6 +45,7 @@ export async function login(view: WebViewLike, cfg: KotConfig) {
       // 一時的な遅延や KOT 側の詰まりで戻ってこないことがある。ページを開き直してやり直す
       // (ID/パスワードが違う場合もここに来るが、それは3回やっても同じなので最後に落ちる)
       await shot(view, `02-login-timeout-${attempt}`);
+      console.log(`  ログイン待ちの画面: ${await describeLoginState(view)}`);
       if (attempt === LOGIN_ATTEMPTS) throw e;
       console.log(`  ログインの応答待ちがタイムアウトしたのでやり直します (${attempt}/${LOGIN_ATTEMPTS})`);
       continue;
@@ -52,6 +53,39 @@ export async function login(view: WebViewLike, cfg: KotConfig) {
     await shot(view, "02-after-login");
     console.log("ログイン成功");
     return;
+  }
+}
+
+/**
+ * ログインが戻ってこないときの画面の様子。公開リポジトリのログに出すので、
+ * 勤怠や個人の情報を含まない物だけ (パス・タイトル・フォームの有無・ログイン画面の注意書き) を返す。
+ */
+async function describeLoginState(view: WebViewLike): Promise<string> {
+  try {
+    return await view.evaluate(`(() => {
+      const btn = document.querySelector(${JSON.stringify(SEL.login.submit)});
+      let covered = "ボタン無し";
+      if (btn) {
+        const r = btn.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        covered = !hit ? "画面外" : btn === hit || btn.contains(hit) ? "押せる" : "覆われている(" + hit.tagName.toLowerCase() + "." + [...hit.classList].join(".") + ")";
+      }
+      const notes = [...document.querySelectorAll(".specific-error, .error, .errorMessage, .alert, [class*=error], [class*=Error]")]
+        .filter(el => el.offsetParent !== null)
+        .map(el => el.textContent.trim().replace(/\\s+/g, " ").slice(0, 80))
+        .filter(Boolean);
+      return [
+        "path=" + location.pathname,
+        "title=" + document.title,
+        "password欄=" + !!document.querySelector("#password"),
+        "id入力済み=" + !!(document.querySelector("#id") || {}).value,
+        "ボタン=" + covered,
+        "readyState=" + document.readyState,
+        "注意書き=" + (notes.join(" / ") || "なし"),
+      ].join(" ");
+    })()`);
+  } catch (e) {
+    return `取得できず (${(e as Error).message})`;
   }
 }
 
