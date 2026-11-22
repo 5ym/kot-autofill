@@ -43,6 +43,11 @@ export async function login(view: WebViewLike, cfg: KotConfig) {
   await shot(view, "01-login-page");
   await setValue(view, SEL.login.id, cfg.id);
   await setValue(view, SEL.login.password, cfg.password);
+  // KOT はログインの失敗 (ID/パスワード違い・ロックなど) を window.alert で出す。
+  // ネイティブのダイアログは見えないので、文だけ控えておき、失敗したときにログへ出す
+  await view.evaluate(
+    `(window.__kotAlerts = [], window.alert = (m) => { window.__kotAlerts.push(String(m).replace(/\\s+/g, " ").slice(0, 200)); }, true)`,
+  );
   await view.click(SEL.login.submit);
   try {
     await waitFor(view, SEL.login.loggedIn, "ログイン完了", LOGIN_TIMEOUT_MS);
@@ -94,6 +99,7 @@ async function describeLoginState(view: WebViewLike): Promise<string> {
         "ボタン=" + covered,
         "readyState=" + document.readyState,
         "注意書き=" + (notes.join(" / ") || "なし"),
+        "ポップアップ=" + ((window.__kotAlerts || []).join(" / ") || "なし"),
       ].join(" ");
     })()`);
   } catch (e) {
