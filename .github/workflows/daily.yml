@@ -3,7 +3,7 @@ name: daily-kot
 # 毎日 4:00 JST (= 前日 19:00 UTC) に、前日分の勤怠を KING OF TIME へ申請し、9:00 JST (= 0:00 UTC) に念のためもう一度回す。
 # (0:00 だと退勤 25:xx〜26:xx の日がまだ稼働中なので、朝方まで待つ。
 #  2回目は1回目が落ちた日の拾い直し。申請中・内容が同じ日はスキップされるので二重にはならない)
-#   1. 稼働レポートCSV (その月分) を REPORT_URL から取得
+#   1. 稼働レポートCSV (その月分) を REPORT_URL から取得 (503 なら Retry-After だけ待って取り直す)
 #   2. 打刻申請 (--date 前日)
 #   3. スケジュール申請 (--schedule --date 前日。休日設定の日だけ実際に送られる)
 # 3 は 2 の後にすること (先に出すと行が [申請中] 表示になる。打刻申請の二重申請判定は
@@ -47,7 +47,8 @@ concurrency:
 jobs:
   submit:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 取得のやり直し (最大 5 回 × 110 秒 + 待ち) と申請のやり直しが重なっても収まるように
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -84,16 +85,40 @@ jobs:
             fi
           fi
 
-          args=(-sS --retry 3 --retry-delay 10 -o data.csv -w '%{http_code}')
+          # worklog は欠けた CSV を 200 で返さない (欠けたまま申請すると勤怠が間違う)。
+          #   503 + Retry-After … Plane などの取得が待ちきれなかった。裏で続いているので、言われた秒数おいて取り直す
+          #   502             … どれかのソースの取得に失敗した。一時的なことが多いので少し置いて取り直す
+          #   4xx             … キー・月・プラン・連携の問題。やり直しても変わらないのですぐ止める
+          # worklog は 1 回の応答を最大 75 秒待つ (前段の Cloudflare は 100 秒で切る)。
+          # 11 月の Plane は使い回しが無いと裏の取得に約 3 分かかるので、1 回目は 503、2 回目で揃う見込み
+          args=(-sS --max-time 110 -o data.csv -D headers.txt -w '%{http_code}')
           if [ -n "$REPORT_TOKEN" ]; then
             args+=(-H "Authorization: Bearer $REPORT_TOKEN")
           fi
-          status=$(curl "${args[@]}" "$url")
-          if [ "$status" != "200" ]; then
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            rm -f data.csv headers.txt
+            status=$(curl "${args[@]}" "$url") || status=${status:-000}
+            [ "$status" = "200" ] && break
             # 失敗時の本文は worklog の JSON {error} (定型文) なので出してよい
-            echo "::error::稼働レポートの取得に失敗 (HTTP $status): $(head -c 300 data.csv)"
-            exit 1
-          fi
+            msg="稼働レポートの取得に失敗 (HTTP $status): $(head -c 300 data.csv 2>/dev/null)"
+            case "$status" in
+              4??) echo "::error::$msg"; exit 1 ;;
+            esac
+            if [ "$i" -eq "$attempts" ]; then
+              echo "::error::$msg ($attempts 回試した)"
+              exit 1
+            fi
+            wait=30
+            if [ "$status" = "503" ]; then
+              ra=$(grep -i '^retry-after:' headers.txt 2>/dev/null | tr -dc '0-9' | head -c 4)
+              [ -n "$ra" ] && wait=$ra
+            fi
+            [ "$wait" -gt 300 ] && wait=300
+            echo "$msg"
+            echo "  ${wait}秒後に取り直します ($i/$attempts)"
+            sleep "$wait"
+          done
           test -s data.csv
           echo "稼働レポートを取得しました ($(wc -l < data.csv) 行)"
 
